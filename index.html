@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Hex Grid Board Game - Refined System</title>
+    <title>Hex Grid Board Game - Character System</title>
     <style>
         * {
             box-sizing: border-box;
@@ -90,6 +90,9 @@
         let hoveredKey = null;    
         let activeEffects = [];   
 
+        // --- キャラクター状態管理 ---
+        let playerHexKey = "0,0"; // プレイヤーが現在滞在しているタイルのキー
+
         let scaleFactor = 1;
         let offsetX = 0;
         let offsetY = 0;
@@ -149,6 +152,7 @@
             hexGrid.clear();
             hoveredKey = null;
             activeEffects = [];
+            playerHexKey = "0,0"; // プレイヤーの位置をリセット
 
             const totalTargetSize = Math.floor(Math.random() * 71) + 30; 
             const hasIslands = Math.random() < 0.7 && totalTargetSize > 40;
@@ -210,7 +214,7 @@
             // メイン陸地を生成
             const mainCluster = generateCluster(0, 0, mainTargetSize, false);
 
-            // 離島の生成処理（メイン陸地から最大8マス以内の距離制限付き）
+            // 離島の生成処理
             if (islandTargetSize > 0) {
                 const mainTileCoords = Array.from(mainCluster.values());
                 const numIslands = Math.floor(Math.random() * 2) + 1; 
@@ -298,15 +302,63 @@
             ctx.closePath();
         }
 
+        // --- キャラクター（人）の描画ロジック ---
+        function drawPlayerCharacter(x, y, radius) {
+            ctx.save();
+
+            // キャラクターが乗っているタイルの浮き上がり(ホバー)を考慮した座標微調整用の基準値
+            const playerTile = hexGrid.get(playerHexKey);
+            const lift = playerTile ? playerTile.hoverProgress * 5 : 0;
+            const pX = x;
+            const pY = y - lift - (radius * 0.2); // タイルより少し上に立たせる
+
+            // 1. キャラクターの影
+            ctx.beginPath();
+            ctx.ellipse(pX, pY + radius * 0.4, radius * 0.3, radius * 0.1, 0, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fill();
+
+            // スタイリッシュなエメラルドグリーンのグラデーション（駒デザイン）
+            const charGrad = ctx.createLinearGradient(pX, pY - radius * 0.6, pX, pY + radius * 0.4);
+            charGrad.addColorStop(0, '#34d399'); // 明るいエメラルド
+            charGrad.addColorStop(1, '#059669'); // 深いエメラルド
+
+            ctx.fillStyle = charGrad;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#10b981';
+
+            // 2. 体（マント・コートをイメージした三角形のコーン型）
+            ctx.beginPath();
+            ctx.moveTo(pX, pY - radius * 0.1);             // 首元
+            ctx.lineTo(pX - radius * 0.25, pY + radius * 0.4); // 左裾
+            ctx.lineTo(pX + radius * 0.25, pY + radius * 0.4); // 右裾
+            ctx.closePath();
+            ctx.fill();
+
+            // 3. 頭（円形）
+            ctx.beginPath();
+            ctx.arc(pX, pY - radius * 0.3, radius * 0.18, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 首元のライトライン（アクセント線）
+            ctx.strokeStyle = '#a7f3d0';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(pX, pY - radius * 0.12, radius * 0.08, 0, Math.PI);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
         // --- 描画メインループ ---
         function draw() {
             ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
 
+            // まず、すべてのヘキサゴンタイルを描画
             hexGrid.forEach((tile, key) => {
                 const center = tile.getCenterPos();
                 const currentRadius = hexRadius * scaleFactor;
 
-                // ホバーのアニメーション
                 if (key === hoveredKey) {
                     tile.hoverProgress += (1 - tile.hoverProgress) * 0.2;
                 } else {
@@ -319,12 +371,10 @@
 
                 ctx.save();
 
-                // タイルの影
                 ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
                 ctx.shadowBlur = 10 + tile.hoverProgress * 8;
                 ctx.shadowOffsetY = 5 + tile.hoverProgress * 3;
 
-                // 【修正】タップ状態による色の変化を完全に廃止し、通常色で統一
                 const grad = ctx.createLinearGradient(drawX, drawY - currentRadius, drawX, drawY + currentRadius);
                 grad.addColorStop(0, '#2e3748');
                 grad.addColorStop(1, '#1a202c');
@@ -333,24 +383,28 @@
                 drawHexagonPath(drawX, drawY, currentRadius - 1.5);
                 ctx.fill();
 
-                // 影をリセットして枠線を描画
                 ctx.shadowBlur = 0;
                 ctx.shadowOffsetY = 0;
 
                 if (key === hoveredKey) {
-                    // ホバー時は枠線が明るく発光
                     ctx.strokeStyle = '#a5b4fc';
                     ctx.lineWidth = 2.5;
                     ctx.shadowBlur = 12;
                     ctx.shadowColor = '#a5b4fc';
                 } else {
-                    // 通常時の枠線
                     ctx.strokeStyle = '#3f4b61';
                     ctx.lineWidth = 1.5;
                 }
                 ctx.stroke();
                 ctx.restore();
             });
+
+            // プレイヤー（キャラクター）を現在地に描画
+            const currentResponseTile = hexGrid.get(playerHexKey);
+            if (currentResponseTile) {
+                const pCenter = currentResponseTile.getCenterPos();
+                drawPlayerCharacter(pCenter.x, pCenter.y, hexRadius * scaleFactor);
+            }
 
             // エフェクト（波紋）の描画
             for (let i = activeEffects.length - 1; i >= 0; i--) {
@@ -403,7 +457,10 @@
             const clickedKey = getTileAtPosition(x, y);
 
             if (clickedKey) {
-                // 【修正】selectedKeyによる状態変更の判定を削除
+                // 【変更】タップしたマスをプレイヤーの現在位置として確定する
+                playerHexKey = clickedKey;
+
+                // 波紋エフェクトを発生させる
                 const center = hexGrid.get(clickedKey).getCenterPos();
                 activeEffects.push(new ClickEffect(center.x, center.y));
             }
