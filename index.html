@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Hex Grid Board Game - Base System</title>
+    <style>
+        /* モダンなダークテーマのスタイル */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            background-color: #12161a;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        /* UIレイアウト */
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            pointer-events: none;
+        }
+        h1 {
+            font-size: 1.2rem;
+            font-weight: 400;
+            letter-spacing: 2px;
+            color: #818cf8;
+            text-transform: uppercase;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        .btn {
+            background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%);
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            border-radius: 30px;
+            cursor: pointer;
+            pointer-events: auto;
+            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
+            transition: all 0.2s ease;
+            outline: none;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(79, 70, 229, 0.6);
+            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+        }
+        .btn:active {
+            transform: translateY(1px);
+            box-shadow: 0 2px 8px rgba(79, 70, 229, 0.4);
+        }
+        /* ゲームキャンバス */
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(circle at center, #1e2530 0%, #0f1319 100%);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <h1>Hex Grid System</h1>
+        <button class="btn" id="regenerate-btn">ステージ再生成</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const regenerateBtn = document.getElementById('regenerate-btn');
+
+        // --- ゲーム状態管理 ---
+        let hexRadius = 40;       // ヘキサゴンの基本半径（自動スケーリングで調整されます）
+        let hexGrid = new Map();  // 生成されたタイルの格納用 (キー: "q,r", 値: Tileオブジェクト)
+        let hoveredKey = null;    // 現在ホバーされているタイルのキー
+        let selectedKey = null;   // 現在選択されているタイルのキー
+        let activeEffects = [];   // 実行中のエフェクトアニメーション
+
+        // --- カメラ/スケーリング情報 ---
+        let scaleFactor = 1;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        // --- ヘキサゴン座標変換の定数 ---
+        // 横型（Flat-topped）ではなく、今回は上部が尖った縦型（Pointy-topped）を採用
+        const SQRT_3 = Math.sqrt(3);
+
+        // --- タイルクラス ---
+        class Tile {
+            constructor(q, r) {
+                this.q = q; // 軸座標 q
+                this.r = r; // 軸座標 r
+                // 軸座標からスクリーン(中心基準)の相対X, Y座標を計算
+                this.relX = hexRadius * (SQRT_3 * q + SQRT_3 / 2 * r);
+                this.relY = hexRadius * (3 / 2 * r);
+                
+                // ビジュアル用イージング変数
+                this.hoverProgress = 0; 
+                this.selectProgress = 0;
+            }
+
+            // タイルの中心の絶対スクリーン座標を取得
+            getCenterPos() {
+                return {
+                    x: this.relX * scaleFactor + offsetX,
+                    y: this.relY * scaleFactor + offsetY
+                };
+            }
+        }
+
+        // --- エフェクトクラス（クリック時の波紋など） ---
+        class ClickEffect {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 10;
+                this.maxRadius = hexRadius * scaleFactor * 1.5;
+                this.alpha = 1;
+                this.isDead = false;
+            }
+            update() {
+                this.radius += (this.maxRadius - this.radius) * 0.15;
+                this.alpha += (0 - this.alpha) * 0.12;
+                if (this.alpha < 0.01) this.isDead = true;
+            }
+            draw() {
+                ctx.save();
+                ctx.strokeStyle = `rgba(129, 140, 248, ${this.alpha})`;
+                ctx.lineWidth = 3;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#818cf8';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        // --- 接続性を担保した有機的グリッド生成アルゴリズム ---
+        function generateOrganicHexGrid() {
+            hexGrid.clear();
+            selectedKey = null;
+            hoveredKey = null;
+            activeEffects = [];
+
+            // 30〜100個の間でランダムに総数を決定
+            const targetSize = Math.floor(Math.random() * 71) + 30; 
+
+            // 縦型ヘキサゴンの隣接6方向へのベクトル (q, r)
+            const directions = [
+                {q: 1, r: 0}, {q: 1, r: -1}, {q: 0, r: -1},
+                {q: -1, r: 0}, {q: -1, r: 1}, {q: 0, r: 1}
+            ];
+
+            // 最初の一歩を(0,0)に配置
+            hexGrid.set("0,0", new Tile(0, 0));
+
+            // 配置済みタイルの周囲にある「拡張可能な空き座標」のリスト（フロンティア）
+            let frontier = [];
+            
+            function updateFrontier(q, r) {
+                directions.forEach(d => {
+                    const nq = q + d.q;
+                    const nr = r + d.r;
+                    const key = `${nq},${nr}`;
+                    if (!hexGrid.has(key) && !frontier.some(f => f.key === key)) {
+                        frontier.push({q: nq, r: nr, key: key});
+                    }
+                });
+            }
+
+            updateFrontier(0, 0);
+
+            // 目標のタイル数に達するまで、フロンティアからランダムに選んで結合していく
+            // これにより、必ず既存のいずれかのタイルと辺で接した有機的な塊（クラスター）が生まれる
+            while (hexGrid.size < targetSize && frontier.length > 0) {
+                // ランダムに候補地を1つ選択
+                const index = Math.floor(Math.random() * frontier.length);
+                const candidate = frontier.splice(index, 1)[0];
+
+                // タイルを確定配置
+                const newTile = new Tile(candidate.q, candidate.r);
+                hexGrid.set(candidate.key, newTile);
+
+                // 新しいタイルの周囲をさらにフロンティアに追加
+                updateFrontier(candidate.q, candidate.r);
+            }
+
+            // 画面に収まるようスケールと位置を自動調整
+            autoScaleAndCenter();
+        }
+
+        // --- オートスケーリング・画面中央揃え ---
+        function autoScaleAndCenter() {
+            if (hexGrid.size === 0) return;
+
+            // 高解像度ディスプレイ(Retina等)対応
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            ctx.scale(dpr, dpr);
+
+            // バウンディングボックス（全タイルの配置上の最大・最小値）を計算
+            let minX = Infinity, maxX = -Infinity;
+            let minY = Infinity, maxY = -Infinity;
+
+            hexGrid.forEach(tile => {
+                if (tile.relX < minX) minX = tile.relX;
+                if (tile.relX > maxX) maxX = tile.relX;
+                if (tile.relY < minY) minY = tile.relY;
+                if (tile.relY > maxY) maxY = tile.relY;
+            });
+
+            // マージンを考慮したグリッド全体の幅と高さ
+            const gridWidth = (maxX - minX) + hexRadius * SQRT_3 * 2;
+            const gridHeight = (maxY - minY) + hexRadius * 3;
+
+            // 画面に収めるための適切なスケール因子を算出
+            const margin = 60; 
+            const scaleX = (window.innerWidth - margin) / gridWidth;
+            const scaleY = (window.innerHeight - margin - 80) / gridHeight; // UI分の余裕を持たせる
+            scaleFactor = Math.min(scaleX, scaleY, 1.2); // 大きくなりすぎないよう上限を設定
+
+            // 描画の中心を画面中央に持ってくるためのオフセットを計算
+            const gridCenterX = minX + (maxX - minX) / 2;
+            const gridCenterY = minY + (maxY - minY) / 2;
+
+            offsetX = window.innerWidth / 2 - gridCenterX * scaleFactor;
+            offsetY = window.innerHeight / 2 - gridCenterY * scaleFactor + 20; // 若干下方に寄せる
+        }
+
+        // --- ヘキサゴン（単体）のパス形成 ---
+        function drawHexagonPath(x, y, radius) {
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                // 縦型（Pointy-topped）のため、角度の初期値を 30度 (Math.PI / 6) に設定
+                const angle = (Math.PI / 3) * i + Math.PI / 6;
+                ctx.lineTo(x + radius * Math.cos(angle), y + radius * Math.sin(angle));
+            }
+            ctx.closePath();
+        }
+
+        // --- 描画メインループ ---
+        function draw() {
+            // 画面クリア
+            ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+            // 1. 各タイルの更新と描画
+            hexGrid.forEach((tile, key) => {
+                const center = tile.getCenterPos();
+                const currentRadius = hexRadius * scaleFactor;
+
+                // アニメーション用のイージング処理
+                // ホバー状態
+                if (key === hoveredKey) {
+                    tile.hoverProgress += (1 - tile.hoverProgress) * 0.2;
+                } else {
+                    tile.hoverProgress += (0 - tile.hoverProgress) * 0.15;
+                }
+                // 選択（アクティブ）状態
+                if (key === selectedKey) {
+                    tile.selectProgress += (1 - tile.selectProgress) * 0.2;
+                } else {
+                    tile.selectProgress += (0 - tile.selectProgress) * 0.15;
+                }
+
+                // 疑似的な「浮き上がり」をY座標の減算で表現
+                const lift = tile.hoverProgress * 5; 
+                const drawX = center.x;
+                const drawY = center.y - lift;
+
+                ctx.save();
+
+                // 影（立体感の演出）
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+                ctx.shadowBlur = 10 + tile.hoverProgress * 8;
+                ctx.shadowOffsetY = 6 + tile.hoverProgress * 4;
+
+                // タイルの基本グラデーション
+                const grad = ctx.createLinearGradient(drawX, drawY - currentRadius, drawX, drawY + currentRadius);
+                
+                // 状態に応じたグラデーションカラーの補間
+                let colorTop = '#2e3748';
+                let colorBottom = '#1a202c';
+
+                if (tile.selectProgress > 0) {
+                    // 選択時のアクティブカラー（インディゴ/ブルー系）
+                    colorTop = `rgba(79, 70, 229, ${tile.selectProgress})`;
+                    colorBottom = `rgba(49, 46, 129, ${tile.selectProgress})`;
+                }
+
+                drawHexagonPath(drawX, drawY, currentRadius - 1.5); // 隣接線が被らないようわずかに小さく
+                ctx.fillStyle = grad;
+                
+                // 選択状態の下地
+                if (tile.selectProgress > 0) {
+                    ctx.fillStyle = '#1a202c'; // ベースを塗る
+                    ctx.fill();
+                    // その上に選択色を重ねる
+                    const selGrad = ctx.createLinearGradient(drawX, drawY - currentRadius, drawX, drawY + currentRadius);
+                    selGrad.addColorStop(0, '#6366f1');
+                    selGrad.addColorStop(1, '#312e81');
+                    ctx.fillStyle = selGrad;
+                    ctx.globalAlpha = tile.selectProgress;
+                    ctx.fill();
+                    ctx.globalAlpha = 1.0;
+                } else {
+                    grad.addColorStop(0, colorTop);
+                    grad.addColorStop(1, colorBottom);
+                    ctx.fill();
+                }
+
+                // 影を一度リセットして枠線を描画（2重影防止）
+                ctx.shadowBlur = 0;
+                ctx.shadowOffsetY = 0;
+
+                // 枠線（ボーダー）のデザイン
+                if (key === hoveredKey) {
+                    ctx.strokeStyle = '#818cf8';
+                    ctx.lineWidth = 2.5;
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = '#818cf8'; // ホバー時は発光(グロー)させる
+                } else if (key === selectedKey) {
+                    ctx.strokeStyle = '#a5b4fc';
+                    ctx.lineWidth = 2.5;
+                } else {
+                    ctx.strokeStyle = '#3f4b61';
+                    ctx.lineWidth = 1.5;
+                }
+                ctx.stroke();
+                ctx.restore();
+            });
+
+            // 2. エフェクト（アニメーション）の描画と更新
+            for (let i = activeEffects.length - 1; i >= 0; i--) {
+                const fx = activeEffects[i];
+                fx.update();
+                fx.draw();
+                if (fx.isDead) activeEffects.splice(i, 1);
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        // --- インタラクション：座標からタイルを特定するロジック ---
+        function getTileAtPosition(screenX, screenY) {
+            let closestKey = null;
+            let minDistance = Infinity;
+            const currentRadius = hexRadius * scaleFactor;
+
+            // 全てのタイルに対して単純な中心距離チェック（十分軽量です）
+            hexGrid.forEach((tile, key) => {
+                const center = tile.getCenterPos();
+                const dx = screenX - center.x;
+                const dy = screenY - center.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                // ヘキサゴンの内接円半径をおおよその判定基準にする
+                if (dist < currentRadius * (SQRT_3 / 2) && dist < minDistance) {
+                    minDistance = dist;
+                    closestKey = key;
+                }
+            });
+
+            return closestKey;
+        }
+
+        // --- イベントハンドラー ---
+        function handleMove(e) {
+            const rect = canvas.getBoundingClientRect();
+            // マウス/タッチ座標の取得
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+
+            hoveredKey = getTileAtPosition(x, y);
+        }
+
+        function handleAction(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+            const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+
+            const clickedKey = getTileAtPosition(x, y);
+
+            if (clickedKey) {
+                selectedKey = clickedKey;
+                // クリックされたタイルの中心座標を取得してエフェクトを発生
+                const center = hexGrid.get(clickedKey).getCenterPos();
+                activeEffects.push(new ClickEffect(center.x, center.y));
+            }
+        }
+
+        // イベント登録 (PC/スマホ両対応)
+        canvas.addEventListener('mousemove', handleMove);
+        canvas.addEventListener('mousedown', handleAction);
+
+        canvas.addEventListener('touchmove', handleMove, { passive: true });
+        canvas.addEventListener('touchstart', handleMove, { passive: true });
+        canvas.addEventListener('touchend', handleAction);
+
+        // リサイズ処理
+        window.addEventListener('resize', autoScaleAndCenter);
+
+        // 再生成ボタン
+        regenerateBtn.addEventListener('click', generateOrganicHexGrid);
+
+        // --- 初期化起動 ---
+        generateOrganicHexGrid();
+        draw();
+
+    </script>
+</body>
+</html>
