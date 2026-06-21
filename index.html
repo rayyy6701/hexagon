@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Hex Grid Board Game - Pro System</title>
+    <title>Hex Grid Board Game - Refined System</title>
     <style>
         * {
             box-sizing: border-box;
@@ -88,7 +88,6 @@
         let hexRadius = 38;       
         let hexGrid = new Map();  
         let hoveredKey = null;    
-        let selectedKey = null;   
         let activeEffects = [];   
 
         let scaleFactor = 1;
@@ -107,7 +106,6 @@
                 this.relY = hexRadius * (3 / 2 * r);
                 
                 this.hoverProgress = 0; 
-                this.selectProgress = 0;
             }
 
             getCenterPos() {
@@ -146,17 +144,13 @@
             }
         }
 
-        // --- 離島の距離制限付き：有機的グリッド生成アルゴリズム ---
+        // --- グリッド生成アルゴリズム ---
         function generateOrganicHexGrid() {
             hexGrid.clear();
-            selectedKey = null;
             hoveredKey = null;
             activeEffects = [];
 
-            // 1. 総タイル数を決定（30〜100個）
             const totalTargetSize = Math.floor(Math.random() * 71) + 30; 
-
-            // 離島を作るかどうかの判定（約70%の確率）
             const hasIslands = Math.random() < 0.7 && totalTargetSize > 40;
             
             let islandTargetSize = 0;
@@ -172,7 +166,6 @@
                 {q: -1, r: 0}, {q: -1, r: 1}, {q: 0, r: 1}
             ];
 
-            // クラスター生成用の内部関数
             function generateCluster(startQ, startR, targetSize, isIsland) {
                 let clusterAdded = 0;
                 let frontier = [];
@@ -214,15 +207,12 @@
                 return localGrid;
             }
 
-            // 2. メイン陸地を生成
+            // メイン陸地を生成
             const mainCluster = generateCluster(0, 0, mainTargetSize, false);
 
-            // 3. 離島の生成処理（距離制限の強化）
+            // 離島の生成処理（メイン陸地から最大8マス以内の距離制限付き）
             if (islandTargetSize > 0) {
-                // メイン陸地を構成するタイルの全座標リストを取得
                 const mainTileCoords = Array.from(mainCluster.values());
-                
-                // 1〜2個の離島グループに分割して配置（数が多すぎると密集するため最大2つに調整）
                 const numIslands = Math.floor(Math.random() * 2) + 1; 
                 let remainingIslandTiles = islandTargetSize;
 
@@ -232,31 +222,22 @@
                     const currentIslandSize = (i === numIslands - 1) ? remainingIslandTiles : Math.floor(remainingIslandTiles / (numIslands - i));
                     remainingIslandTiles -= currentIslandSize;
 
-                    // 【距離制限ロジックの要】
-                    // メイン陸地の「いずれかのタイル」から指定の距離（4〜7マス離れた位置）を起点にする。
-                    // これにより、メイン陸地全体の形状に沿った、最大でも「8マス以内」の離島を保証します。
                     let validSpawnFound = false;
                     let startQ = 0, startR = 0;
                     
-                    // 無限ループ防止用のカウンター
                     for (let attempts = 0; attempts < 100; attempts++) {
-                        // メイン陸地からランダムに1マス基準を選ぶ
                         const baseTile = mainTileCoords[Math.floor(Math.random() * mainTileCoords.length)];
-                        
-                        // 基準マスからどのくらい離すか（4〜7マスの範囲＝最大8マス未満）
                         const dist = Math.floor(Math.random() * 4) + 4; 
                         const angleDir = Math.floor(Math.random() * 6);
                         
                         const dir = directions[angleDir];
                         const sideDir = directions[(angleDir + 2) % 6];
                         
-                        // 基準マスから外側に吹き飛ばした座標を算出
                         const testQ = baseTile.q + dir.q * dist + sideDir.q * Math.floor(Math.random() * 2);
                         const testR = baseTile.r + dir.r * dist + sideDir.r * Math.floor(Math.random() * 2);
                         
                         const key = `${testQ},${testR}`;
                         
-                        // すでにタイルが存在しない空き地であれば離島の起点に決定
                         if (!hexGrid.has(key)) {
                             startQ = testQ;
                             startR = testR;
@@ -265,7 +246,6 @@
                         }
                     }
 
-                    // 起点が見つかったら離島クラスターを生成
                     if (validSpawnFound) {
                         generateCluster(startQ, startR, currentIslandSize, true);
                     }
@@ -326,16 +306,11 @@
                 const center = tile.getCenterPos();
                 const currentRadius = hexRadius * scaleFactor;
 
+                // ホバーのアニメーション
                 if (key === hoveredKey) {
                     tile.hoverProgress += (1 - tile.hoverProgress) * 0.2;
                 } else {
                     tile.hoverProgress += (0 - tile.hoverProgress) * 0.15;
-                }
-
-                if (key === selectedKey) {
-                    tile.selectProgress += (1 - tile.selectProgress) * 0.2;
-                } else {
-                    tile.selectProgress += (0 - tile.selectProgress) * 0.15;
                 }
 
                 const lift = tile.hoverProgress * 5; 
@@ -344,46 +319,32 @@
 
                 ctx.save();
 
-                if (tile.selectProgress > 0) {
-                    ctx.shadowColor = 'rgba(99, 102, 241, 0.4)';
-                    ctx.shadowBlur = 12 + tile.hoverProgress * 6;
-                } else {
-                    ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
-                    ctx.shadowBlur = 10 + tile.hoverProgress * 8;
-                }
+                // タイルの影
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+                ctx.shadowBlur = 10 + tile.hoverProgress * 8;
                 ctx.shadowOffsetY = 5 + tile.hoverProgress * 3;
 
+                // 【修正】タップ状態による色の変化を完全に廃止し、通常色で統一
                 const grad = ctx.createLinearGradient(drawX, drawY - currentRadius, drawX, drawY + currentRadius);
-                
-                if (tile.selectProgress > 0) {
-                    const selGrad = ctx.createLinearGradient(drawX, drawY - currentRadius, drawX, drawY + currentRadius);
-                    selGrad.addColorStop(0, '#818cf8'); 
-                    selGrad.addColorStop(0.5, '#4f46e5'); 
-                    selGrad.addColorStop(1, '#3730a3'); 
-                    ctx.fillStyle = selGrad;
-                } else {
-                    grad.addColorStop(0, '#2e3748');
-                    grad.addColorStop(1, '#1a202c');
-                    ctx.fillStyle = grad;
-                }
+                grad.addColorStop(0, '#2e3748');
+                grad.addColorStop(1, '#1a202c');
+                ctx.fillStyle = grad;
 
                 drawHexagonPath(drawX, drawY, currentRadius - 1.5);
                 ctx.fill();
 
+                // 影をリセットして枠線を描画
                 ctx.shadowBlur = 0;
                 ctx.shadowOffsetY = 0;
 
                 if (key === hoveredKey) {
+                    // ホバー時は枠線が明るく発光
                     ctx.strokeStyle = '#a5b4fc';
                     ctx.lineWidth = 2.5;
                     ctx.shadowBlur = 12;
                     ctx.shadowColor = '#a5b4fc';
-                } else if (key === selectedKey) {
-                    ctx.strokeStyle = '#e0e7ff';
-                    ctx.lineWidth = 3;
-                    ctx.shadowBlur = 8;
-                    ctx.shadowColor = '#e0e7ff';
                 } else {
+                    // 通常時の枠線
                     ctx.strokeStyle = '#3f4b61';
                     ctx.lineWidth = 1.5;
                 }
@@ -391,6 +352,7 @@
                 ctx.restore();
             });
 
+            // エフェクト（波紋）の描画
             for (let i = activeEffects.length - 1; i >= 0; i--) {
                 const fx = activeEffects[i];
                 fx.update();
@@ -441,7 +403,7 @@
             const clickedKey = getTileAtPosition(x, y);
 
             if (clickedKey) {
-                selectedKey = clickedKey;
+                // 【修正】selectedKeyによる状態変更の判定を削除
                 const center = hexGrid.get(clickedKey).getCenterPos();
                 activeEffects.push(new ClickEffect(center.x, center.y));
             }
